@@ -1,0 +1,24 @@
+# TFV Configuration File
+# ----------------------
+# Customize your keybindings below.
+# Lines starting with # or ; are comments and are ignored.
+#
+# For single characters, just type the character (e.g.  move_down = j)
+# For special keys, use one of these names:
+#
+#   UP  DOWN  LEFT  RIGHT
+#   ENTER  ESCAPE  BACKSPACE  DELETE
+#   HOME  END  PAGEUP  PAGEDOWN
+#
+# Example:  enter_dir = ENTER
+
+[keybindings]
+move_down    = h          # move cursor down
+move_up      = t          # move cursor up
+enter_dir    = s          # enter selected directory (also ENTER works by default)
+parent_dir   = a          # go to parent directory
+command_line = :          # open the command line
+quit         = q          # exit TFV
+select       =            # (Space) select / deselect entry
+refresh      = r          # refresh current directory listing
+search       = /          # activate live search (filter files as you type)
