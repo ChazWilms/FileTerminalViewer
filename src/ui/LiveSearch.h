@@ -30,13 +30,17 @@ public:
     // Filtered subset of the entries — updated on every keystroke.
     const std::vector<FS::Entry>& matches() const { return m_matches; }
 
+    // Index of the currently highlighted match (0-based within matches()).
+    int selectedIndex() const { return m_selectedIndex; }
+
     // True if the user pressed Enter to confirm (vs Escape to cancel).
     bool confirmed() const { return m_confirmed; }
 
 private:
-    bool                  m_active    = false;
-    bool                  m_confirmed = false;
-    std::string           m_query;
+    bool                   m_active        = false;
+    bool                   m_confirmed     = false;
+    int                    m_selectedIndex = 0;
+    std::string            m_query;
     std::vector<FS::Entry> m_allEntries;
     std::vector<FS::Entry> m_matches;
 

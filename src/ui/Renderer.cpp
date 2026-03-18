@@ -13,11 +13,19 @@ using PC = Platform::Color;
 // Layout constants
 // -----------------------------------------------------------------------
 
-static constexpr int HEADER_ROWS  = 2; // path + separator
-static constexpr int FOOTER_ROWS  = 1; // status / command bar
-static constexpr int COL_NAME_W   = 40;
+static constexpr int HEADER_ROWS  = 2;  // path + separator
+static constexpr int FOOTER_ROWS  = 1;  // status / command bar
 static constexpr int COL_SIZE_W   = 12;
 static constexpr int COL_DATE_W   = 18;
+static constexpr int COL_GAP      = 2;  // spaces between columns
+static constexpr int COL_NAME_MIN = 20; // floor so it never vanishes
+
+// Name column width: fills whatever is left after size + date + gaps.
+static int nameColWidth() {
+    auto dim = Platform::getDimensions();
+    int fixed = COL_SIZE_W + COL_GAP + COL_DATE_W;
+    return std::max(COL_NAME_MIN, dim.width - fixed);
+}
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -71,12 +79,19 @@ static void drawHeader(const RenderState& state) {
     pathLine = truncate(pathLine, dim.width);
     Platform::writeTextAt(0, 0, padRight(pathLine, dim.width), PC::White, headerBg);
 
-    // Row 1: column headers.
+    // Row 1: column headers — show active sort field and direction.
     Platform::clearLine(1, PC::Black);
+    std::string nameHdr  = " Name";
+    std::string sizeHdr  = "Size";
+    std::string dateHdr  = "Modified";
+    const std::string& si = state.sortIndicator;
+    if      (si.rfind("name", 0) == 0) nameHdr = " Name" + si.substr(4);
+    else if (si.rfind("size", 0) == 0) sizeHdr = "Size" + si.substr(4);
+    else if (si.rfind("date", 0) == 0) dateHdr = "Modified" + si.substr(4);
     std::string header =
-        padRight(" Name", COL_NAME_W) +
-        padLeft("Size",   COL_SIZE_W) + "  " +
-        padRight("Modified", COL_DATE_W);
+        padRight(nameHdr, nameColWidth()) +
+        padLeft(sizeHdr,  COL_SIZE_W) + "  " +
+        padRight(dateHdr, COL_DATE_W);
     Platform::writeTextAt(0, 1, truncate(header, dim.width), PC::DarkGray, PC::Black);
 }
 
@@ -101,9 +116,8 @@ static void drawEntryRow(int screenRow, const FS::Entry& e,
         fg = PC::White; bg = PC::Black;
     }
 
-    std::string prefix   = (e.type == FS::EntryType::Directory) ? "[D] " : "    ";
-    std::string fullName = truncate(prefix + e.name, COL_NAME_W);
-    std::string namePad  = padRight(fullName, COL_NAME_W);
+    std::string fullName = truncate(e.name, nameColWidth());
+    std::string namePad  = padRight(fullName, nameColWidth());
     std::string sizePart = padLeft(formatSize(e.size), COL_SIZE_W);
     std::string datePart = padRight(e.modified, COL_DATE_W);
     std::string tail     = sizePart + "  " + datePart;
@@ -132,7 +146,7 @@ static void drawEntryRow(int screenRow, const FS::Entry& e,
 
     std::string before = padRight(fullName.substr(0, matchPos), 0);
     std::string match  = fullName.substr(matchPos, matchEnd - matchPos);
-    std::string after  = padRight(fullName.substr(matchEnd), COL_NAME_W - static_cast<int>(matchEnd));
+    std::string after  = padRight(fullName.substr(matchEnd), nameColWidth() - static_cast<int>(matchEnd));
 
     // Write the three name segments then the tail.
     Platform::writeTextAt(0, screenRow, before, fg, bg);
@@ -140,8 +154,8 @@ static void drawEntryRow(int screenRow, const FS::Entry& e,
     Platform::writeTextAt(matchCol, screenRow, match, PC::Black, PC::Yellow);
     int afterCol = static_cast<int>(matchEnd);
     Platform::writeTextAt(afterCol, screenRow, after, fg, bg);
-    Platform::writeTextAt(COL_NAME_W, screenRow,
-                          padRight(tail, dim.width - COL_NAME_W), fg, bg);
+    Platform::writeTextAt(nameColWidth(), screenRow,
+                          padRight(tail, dim.width - nameColWidth()), fg, bg);
 }
 
 void drawFileList(const RenderState& state) {
@@ -169,27 +183,36 @@ void drawFileList(const RenderState& state) {
 void drawStatusBar(const RenderState& state) {
     auto dim = Platform::getDimensions();
     int row = dim.height - 1;
-    Platform::clearLine(row, PC::DarkBlue);
 
     std::string text;
     bool showCursor = false;
+    PC::Code fg, bg;
 
-    if (state.cmdLineActive) {
+    if (state.confirmActive) {
+        text = " " + state.statusMsg;
+        fg   = PC::Yellow;
+        bg   = PC::DarkRed;
+    } else if (state.cmdLineActive) {
         text = ":" + state.cmdLineBuffer;
         showCursor = true;
+        fg = PC::White;
+        bg = PC::DarkBlue;
     } else if (state.searchActive) {
         text = " / " + state.searchQuery;
         showCursor = true;
+        fg = PC::White;
+        bg = PC::DarkBlue;
     } else {
         text = " " + state.statusMsg;
-        if (!state.clipboard.empty()) {
+        if (!state.clipboard.empty())
             text += "  [clip: " + state.clipboard + "]";
-        }
+        fg = PC::Gray;
+        bg = PC::DarkBlue;
     }
 
+    Platform::clearLine(row, bg);
     text = truncate(text, dim.width);
-    PC::Code fg = (state.cmdLineActive || state.searchActive) ? PC::White : PC::Gray;
-    Platform::writeTextAt(0, row, padRight(text, dim.width), fg, PC::DarkBlue);
+    Platform::writeTextAt(0, row, padRight(text, dim.width), fg, bg);
 
     if (showCursor) {
         Platform::setCursorPos(static_cast<int>(text.size()), row);

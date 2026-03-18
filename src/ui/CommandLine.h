@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <functional>
+#include <vector>
 
 // CommandLine handles the ":" prompt at the bottom of the screen.
 // It receives a completed command string and dispatches to a handler.
@@ -42,10 +43,15 @@ public:
     const std::string& lastMessage() const { return m_lastMessage; }
 
 private:
-    CommandHandler m_handler;
-    std::string    m_buffer;
-    bool           m_active     = false;
-    std::string    m_lastMessage;
+    CommandHandler           m_handler;
+    std::string              m_buffer;
+    bool                     m_active      = false;
+    std::string              m_lastMessage;
+
+    // Command history (oldest first). Up arrow walks backwards.
+    std::vector<std::string> m_history;
+    int                      m_historyIdx  = -1; // -1 = not browsing
+    std::string              m_savedBuffer;       // buffer before browsing started
 };
 
 } // namespace UI

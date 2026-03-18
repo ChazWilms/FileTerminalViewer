@@ -3,6 +3,12 @@
 #include "ui/Renderer.h"
 #include <sstream>
 #include <algorithm>
+#include <functional>
+#include <vector>
+#ifdef PLATFORM_WINDOWS
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 // -----------------------------------------------------------------------
 // Constructor
@@ -35,6 +41,21 @@ void App::run() {
 // -----------------------------------------------------------------------
 
 void App::handleKey(int key) {
+    // Priority 0: confirmation prompt — y confirms, anything else cancels.
+    if (!m_confirmMsg.empty()) {
+        if (key == 'y' || key == 'Y') {
+            auto action = std::move(m_confirmAction);
+            m_confirmMsg.clear();
+            m_confirmAction = nullptr;
+            action();
+        } else {
+            m_confirmMsg.clear();
+            m_confirmAction = nullptr;
+            setStatus("Cancelled.");
+        }
+        return;
+    }
+
     // Priority 1: command line eats all keys while active.
     if (m_cmdLine.isActive()) {
         bool still_active = m_cmdLine.handleKey(key);
@@ -49,10 +70,12 @@ void App::handleKey(int key) {
         bool still_active = m_liveSearch.handleKey(key);
         if (!still_active) {
             if (m_liveSearch.confirmed() && !m_liveSearch.matches().empty()) {
-                // Replace the visible list with the filtered result and reset cursor.
+                // Replace the visible list with the filtered result.
+                // Land the cursor on whatever the user had highlighted.
                 m_entries      = m_liveSearch.matches();
-                m_cursorIndex  = 0;
+                m_cursorIndex  = m_liveSearch.selectedIndex();
                 m_scrollOffset = 0;
+                clampScroll();
                 setStatus("Search: " + m_liveSearch.query() +
                           "  (" + std::to_string(m_entries.size()) + " results)");
             } else {
@@ -69,11 +92,18 @@ void App::handleKey(int key) {
     if      (key == k.quit)         { m_running = false; }
     else if (key == k.move_down)    { moveCursor(+1); }
     else if (key == k.move_up)      { moveCursor(-1); }
-    else if (key == k.enter_dir)    {
+    else if (key == k.enter_dir || key == k.enter_file) {
         if (!m_entries.empty()) {
             const auto& e = m_entries[m_cursorIndex];
             if (e.type == FS::EntryType::Directory) {
                 navigateTo(FS::joinPath(m_currentPath, e.name));
+            } else {
+                // Open file with default application.
+#ifdef PLATFORM_WINDOWS
+                std::string full = FS::joinPath(m_currentPath, e.name);
+                ShellExecuteA(nullptr, "open", full.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+                setStatus("Opened: " + e.name);
+#endif
             }
         }
     }
@@ -83,12 +113,21 @@ void App::handleKey(int key) {
     else if (key == k.search)       {
         // Always search against the full directory listing.
         m_entries = FS::listDirectory(m_currentPath);
+        m_searchScrollOffset = 0;
         m_liveSearch.activate(m_entries);
         setStatus("");
     }
-    // Copy / paste — bound to 'c' and 'p' by default (not in config yet, coming soon).
-    else if (key == 'c')            { copySelected(); }
-    else if (key == 'p')            { pasteClipboard(); }
+    else if (key == k.page_down)    { pageMove(+1); }
+    else if (key == k.page_up)      { pageMove(-1); }
+    else if (key == k.jump_top)     { moveCursor(-static_cast<int>(m_entries.size())); }
+    else if (key == k.jump_bottom)  { moveCursor(+static_cast<int>(m_entries.size())); }
+    else if (key == k.toggle_hidden) {
+        m_settings.show_hidden = !m_settings.show_hidden;
+        refresh();
+        setStatus(m_settings.show_hidden ? "Hidden files shown." : "Hidden files hidden.");
+    }
+    else if (key == k.copy_entry)   { copySelected(); }
+    else if (key == k.paste_entry)  { pasteClipboard(); }
 }
 
 // -----------------------------------------------------------------------
@@ -109,7 +148,16 @@ void App::navigateTo(const std::string& path) {
 }
 
 void App::refresh() {
-    m_entries = FS::listDirectory(m_currentPath);
+    auto all = FS::listDirectory(m_currentPath);
+    if (!m_settings.show_hidden) {
+        m_entries.clear();
+        for (auto& e : all)
+            if (!e.hidden)
+                m_entries.push_back(std::move(e));
+    } else {
+        m_entries = std::move(all);
+    }
+    reSort();
     // Clamp cursor in case the directory shrank.
     if (!m_entries.empty()) {
         m_cursorIndex = std::min(m_cursorIndex, static_cast<int>(m_entries.size()) - 1);
@@ -124,6 +172,42 @@ void App::moveCursor(int delta) {
     m_cursorIndex += delta;
     m_cursorIndex = std::max(0, std::min(m_cursorIndex, static_cast<int>(m_entries.size()) - 1));
     clampScroll();
+    m_statusMsg.clear();
+}
+
+void App::pageMove(int direction) {
+    if (m_entries.empty()) return;
+    auto dim = Platform::getDimensions();
+    int pageSize = std::max(1, dim.height - 3);
+    moveCursor(direction * pageSize);
+}
+
+void App::reSort() {
+    auto cmp = [this](const FS::Entry& a, const FS::Entry& b) -> bool {
+        // Directories always sort before files regardless of field.
+        bool aDir = (a.type == FS::EntryType::Directory);
+        bool bDir = (b.type == FS::EntryType::Directory);
+        if (aDir != bDir) return aDir > bDir;
+
+        bool less;
+        switch (m_sortField) {
+        case SortField::Size:
+            less = a.size < b.size;
+            break;
+        case SortField::Date:
+            less = a.modified < b.modified;
+            break;
+        default: { // Name
+            std::string la = a.name, lb = b.name;
+            std::transform(la.begin(), la.end(), la.begin(), ::tolower);
+            std::transform(lb.begin(), lb.end(), lb.begin(), ::tolower);
+            less = la < lb;
+            break;
+        }
+        }
+        return (m_sortOrder == SortOrder::Asc) ? less : !less;
+    };
+    std::sort(m_entries.begin(), m_entries.end(), cmp);
 }
 
 void App::clampScroll() {
@@ -212,11 +296,18 @@ UI::CommandResult App::dispatchCommand(const std::string& rawCmd) {
 
     // ---- cd ----
     if (cmd == "cd") {
-        std::string target = arg.empty() ? m_currentPath : arg;
-        // Support relative paths.
-        if (!arg.empty() && arg[1] != ':') {
-            target = FS::joinPath(m_currentPath, arg);
+        if (arg.empty()) return {false, "Usage: cd <path>"};
+        std::string target = arg;
+        // Expand ~ to %USERPROFILE%.
+        if (target == "~" || (target.size() >= 2 && (target[1] == '/' || target[1] == '\\'))) {
+#ifdef PLATFORM_WINDOWS
+            const char* home = std::getenv("USERPROFILE");
+            if (home) target = std::string(home) + (target == "~" ? "" : target.substr(1));
+#endif
         }
+        // Treat as absolute only if it looks like a drive path (e.g. C:\).
+        bool isAbsolute = (target.size() >= 2 && target[1] == ':');
+        if (!isAbsolute) target = FS::joinPath(m_currentPath, target);
         navigateTo(target);
         return {true, "Changed directory."};
     }
@@ -224,36 +315,45 @@ UI::CommandResult App::dispatchCommand(const std::string& rawCmd) {
     // ---- mkdir ----
     if (cmd == "mkdir") {
         if (arg.empty()) return {false, "Usage: mkdir <name>"};
-        FS::makeDirectory(FS::joinPath(m_currentPath, arg));
-        refresh();
-        return {true, "Directory created."};
+        std::string target = FS::joinPath(m_currentPath, arg);
+        if (FS::exists(target)) return {false, "Already exists: " + arg};
+        bool ok = FS::makeDirectory(target);
+        if (ok) refresh();
+        return {ok, ok ? "Directory created." : "Failed to create directory."};
     }
 
     // ---- mkf ----
     if (cmd == "mkf") {
         if (arg.empty()) return {false, "Usage: mkf <name>"};
-        FS::makeFile(FS::joinPath(m_currentPath, arg));
-        refresh();
-        return {true, "File created."};
+        std::string target = FS::joinPath(m_currentPath, arg);
+        if (FS::exists(target)) return {false, "Already exists: " + arg};
+        bool ok = FS::makeFile(target);
+        if (ok) refresh();
+        return {ok, ok ? "File created." : "Failed to create file."};
     }
 
-    // ---- del ----
-    if (cmd == "del") {
+    // ---- del / rm — unified delete (files and directories) ----
+    if (cmd == "del" || cmd == "rm") {
+        std::string name, target;
+        bool isDir;
         if (arg.empty()) {
-            deleteSelected();
-            return {true, m_statusMsg};
+            if (m_entries.empty()) return {false, "Nothing to delete."};
+            const auto& e = m_entries[m_cursorIndex];
+            name   = e.name;
+            target = FS::joinPath(m_currentPath, name);
+            isDir  = (e.type == FS::EntryType::Directory);
+        } else {
+            name   = arg;
+            target = FS::joinPath(m_currentPath, arg);
+            isDir  = FS::isDirectory(target);
         }
-        bool ok = FS::deleteFile(FS::joinPath(m_currentPath, arg));
-        refresh();
-        return {ok, ok ? "Deleted." : "Delete failed."};
-    }
-
-    // ---- rm ----
-    if (cmd == "rm") {
-        if (arg.empty()) return {false, "Usage: rm <dir>"};
-        bool ok = FS::deleteDirectory(FS::joinPath(m_currentPath, arg));
-        refresh();
-        return {ok, ok ? "Removed." : "Remove failed (directory may not be empty)."};
+        std::string prompt = (isDir ? "Delete dir \"" : "Delete \"") + name + "\"? [y/n]";
+        requestConfirm(prompt, [this, target, name, isDir]() {
+            bool ok = isDir ? FS::deleteDirectoryRecursive(target) : FS::deleteFile(target);
+            refresh();
+            setStatus(ok ? "Deleted: " + name : "Delete failed: " + name);
+        });
+        return {true, ""};
     }
 
     // ---- nvim ----
@@ -262,9 +362,35 @@ UI::CommandResult App::dispatchCommand(const std::string& rawCmd) {
             ? (m_entries.empty() ? "" : FS::joinPath(m_currentPath, m_entries[m_cursorIndex].name))
             : FS::joinPath(m_currentPath, arg);
         if (target.empty()) return {false, "No file selected."};
-        std::string sysCmd = "nvim \"" + target + "\"";
         Platform::shutdown();
-        std::system(sysCmd.c_str());
+#ifdef PLATFORM_WINDOWS
+        // Use CreateProcess to avoid shell injection via filenames with quotes.
+        {
+            // Build the command line with proper quoting.
+            std::string cmdLine = "nvim \"" + target + "\"";
+            // Replace any embedded double-quotes in the path with escaped versions.
+            std::string safePath = target;
+            size_t pos = 0;
+            while ((pos = safePath.find('"', pos)) != std::string::npos) {
+                safePath.replace(pos, 1, "\\\"");
+                pos += 2;
+            }
+            std::string safeCmd = "nvim \"" + safePath + "\"";
+            std::vector<char> buf(safeCmd.begin(), safeCmd.end());
+            buf.push_back('\0');
+            STARTUPINFOA si = {};
+            si.cb = sizeof(si);
+            PROCESS_INFORMATION pi = {};
+            if (CreateProcessA(nullptr, buf.data(), nullptr, nullptr,
+                               FALSE, 0, nullptr, nullptr, &si, &pi)) {
+                WaitForSingleObject(pi.hProcess, INFINITE);
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+            }
+        }
+#else
+        std::system(("nvim \"" + target + "\"").c_str());
+#endif
         Platform::init();
         refresh();
         return {true, "Returned from nvim."};
@@ -280,10 +406,97 @@ UI::CommandResult App::dispatchCommand(const std::string& rawCmd) {
         return {true, "Config reloaded."};
     }
 
+    // ---- rename ----
+    if (cmd == "rename") {
+        if (arg.empty()) return {false, "Usage: rename <new_name>"};
+        if (m_entries.empty()) return {false, "No entry selected."};
+        const auto& e = m_entries[m_cursorIndex];
+        std::string src = FS::joinPath(m_currentPath, e.name);
+        std::string dst = FS::joinPath(m_currentPath, arg);
+        if (FS::exists(dst)) return {false, "Rename failed: destination already exists."};
+        bool ok = FS::moveEntry(src, dst);
+        if (ok) refresh();
+        return {ok, ok ? "Renamed to: " + arg : "Rename failed."};
+    }
+
+    // ---- mv ----
+    if (cmd == "mv") {
+        if (arg.empty()) return {false, "Usage: mv <destination_path>"};
+        if (m_entries.empty()) return {false, "No entry selected."};
+        const auto& e = m_entries[m_cursorIndex];
+        std::string src = FS::joinPath(m_currentPath, e.name);
+        // Resolve relative destination against current path.
+        std::string dst = (arg.size() >= 2 && arg[1] == ':')
+            ? arg
+            : FS::joinPath(m_currentPath, arg);
+        bool ok = FS::moveEntry(src, dst);
+        if (ok) refresh();
+        return {ok, ok ? "Moved to: " + arg : "Move failed."};
+    }
+
+    // ---- open ----
+    if (cmd == "open") {
+        std::string target = arg.empty()
+            ? (m_entries.empty() ? "" : FS::joinPath(m_currentPath, m_entries[m_cursorIndex].name))
+            : FS::joinPath(m_currentPath, arg);
+        if (target.empty()) return {false, "No file selected."};
+#ifdef PLATFORM_WINDOWS
+        HINSTANCE result = ShellExecuteA(nullptr, "open",
+            target.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        bool ok = (reinterpret_cast<intptr_t>(result) > 32);
+        return {ok, ok ? "Opened: " + (arg.empty() ? m_entries[m_cursorIndex].name : arg)
+                       : "Open failed."};
+#else
+        return {false, "open command not supported on this platform."};
+#endif
+    }
+
+    // ---- sort ----
+    if (cmd == "sort") {
+        // Toggle direction if same field, otherwise switch field.
+        if (arg == "name" || arg.empty()) {
+            if (m_sortField == SortField::Name)
+                m_sortOrder = (m_sortOrder == SortOrder::Asc) ? SortOrder::Desc : SortOrder::Asc;
+            else { m_sortField = SortField::Name; m_sortOrder = SortOrder::Asc; }
+        } else if (arg == "size") {
+            if (m_sortField == SortField::Size)
+                m_sortOrder = (m_sortOrder == SortOrder::Asc) ? SortOrder::Desc : SortOrder::Asc;
+            else { m_sortField = SortField::Size; m_sortOrder = SortOrder::Asc; }
+        } else if (arg == "date") {
+            if (m_sortField == SortField::Date)
+                m_sortOrder = (m_sortOrder == SortOrder::Asc) ? SortOrder::Desc : SortOrder::Asc;
+            else { m_sortField = SortField::Date; m_sortOrder = SortOrder::Asc; }
+        } else {
+            return {false, "Usage: sort [name|size|date]"};
+        }
+        reSort();
+        std::string fieldName = (m_sortField == SortField::Size) ? "size" :
+                                (m_sortField == SortField::Date) ? "date" : "name";
+        std::string orderName = (m_sortOrder == SortOrder::Asc) ? "asc" : "desc";
+        return {true, "Sorted by " + fieldName + " (" + orderName + ")"};
+    }
+
     // ---- help ----
     if (cmd == "help") {
-        return {true,
-            "Commands: cd, mkdir, mkf, del, rm, nvim, initConfig, refreshConfig, help, q"};
+        if (arg.empty()) {
+            return {true,
+                "cd  mkdir  mkf  del  rename  mv  nvim  open  sort  "
+                "c=copy  p=paste  /=search  H=toggle hidden  initConfig  refreshConfig  q  "
+                "| Type 'help <cmd>' for details"};
+        }
+        if (arg == "cd")            return {true, "cd <path> — navigate to a directory (relative or absolute)"};
+        if (arg == "mkdir")         return {true, "mkdir <name> — create a new directory in the current folder"};
+        if (arg == "mkf")           return {true, "mkf <name> — create a new empty file in the current folder"};
+        if (arg == "del" || arg == "rm") return {true, "del/rm [name] — delete file or directory (recursive); omit name to delete the selected entry"};
+        if (arg == "nvim")          return {true, "nvim [name] — open a file in neovim; omit name to open the selected entry"};
+        if (arg == "rename")        return {true, "rename <new_name> — rename the selected entry in the current directory"};
+        if (arg == "mv")            return {true, "mv <destination> — move the selected entry to a path (relative or absolute)"};
+        if (arg == "open")          return {true, "open [name] — open a file with its default application; omit name to open the selected entry"};
+        if (arg == "sort")           return {true, "sort [name|size|date] — sort the listing; repeat to toggle asc/desc"};
+        if (arg == "initConfig")    return {true, "initConfig — write a default config template to the current directory"};
+        if (arg == "refreshConfig") return {true, "refreshConfig — reload the config file from disk"};
+        if (arg == "q" || arg == "quit") return {true, "q / quit — exit TFV"};
+        return {false, "No help entry for: " + arg};
     }
 
     // ---- q (quit from command line) ----
@@ -308,6 +521,13 @@ UI::RenderState App::buildRenderState() const {
     s.cmdLineBuffer = m_cmdLine.buffer();
     s.searchActive  = m_liveSearch.isActive();
     s.searchQuery   = m_liveSearch.query();
+    s.confirmActive  = !m_confirmMsg.empty();
+    {
+        std::string field = (m_sortField == SortField::Size) ? "size" :
+                            (m_sortField == SortField::Date) ? "date" : "name";
+        std::string arrow = (m_sortOrder == SortOrder::Asc)  ? " ^" : " v";
+        s.sortIndicator = field + arrow;
+    }
     s.clipboard     = m_clipboard.empty() ? "" :
         ([&]{
             size_t sep = m_clipboard.find_last_of("\\/");
@@ -318,12 +538,29 @@ UI::RenderState App::buildRenderState() const {
 
     // Show filtered matches while searching, full list otherwise.
     if (m_liveSearch.isActive()) {
-        s.entries  = m_liveSearch.matches();
-        s.statusMsg = "Search: " + m_liveSearch.query() +
-                      "  (" + std::to_string(s.entries.size()) + " results)";
+        s.entries     = m_liveSearch.matches();
+        s.cursorIndex = m_liveSearch.selectedIndex();
+        // Clamp search scroll offset so the highlighted entry stays visible.
+        auto dim = Platform::getDimensions();
+        int listRows = std::max(1, dim.height - 3);
+        if (s.cursorIndex < m_searchScrollOffset)
+            m_searchScrollOffset = s.cursorIndex;
+        else if (s.cursorIndex >= m_searchScrollOffset + listRows)
+            m_searchScrollOffset = s.cursorIndex - listRows + 1;
+        s.scrollOffset = m_searchScrollOffset;
+        s.statusMsg    = "Search: " + m_liveSearch.query() +
+                         "  (" + std::to_string(s.entries.size()) + " results)";
     } else {
-        s.entries  = m_entries;
-        s.statusMsg = m_statusMsg;
+        s.entries = m_entries;
+        std::string countStr = std::to_string(s.entries.size()) + " item" +
+                               (s.entries.size() == 1 ? "" : "s");
+        if (!m_confirmMsg.empty()) {
+            s.statusMsg = m_confirmMsg;
+        } else {
+            s.statusMsg = m_statusMsg.empty()
+                ? countStr
+                : m_statusMsg + "  [" + countStr + "]";
+        }
     }
 
     return s;
@@ -335,4 +572,9 @@ void App::redraw() {
 
 void App::setStatus(const std::string& msg) {
     m_statusMsg = msg;
+}
+
+void App::requestConfirm(const std::string& msg, std::function<void()> action) {
+    m_confirmMsg    = msg;
+    m_confirmAction = std::move(action);
 }

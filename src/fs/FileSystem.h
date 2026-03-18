@@ -20,6 +20,7 @@ struct Entry {
     EntryType   type;
     long long   size;       // bytes; -1 for directories
     std::string modified;   // formatted last-modified string
+    bool        hidden = false; // FILE_ATTRIBUTE_HIDDEN or dot-prefix
 };
 
 // Return a sorted list of entries in the given directory.

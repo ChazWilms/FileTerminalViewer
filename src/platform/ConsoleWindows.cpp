@@ -26,6 +26,33 @@ static WORD makeAttr(Color::Code fg, Color::Code bg) {
     return static_cast<WORD>(fg) | (static_cast<WORD>(bg) << 4);
 }
 
+// Last window size seen — used to detect resize.
+static SHORT s_lastWinW = 0;
+static SHORT s_lastWinH = 0;
+
+// Resize the screen buffer to match the current window size.
+// Called on init and lazily on every getDimensions() call.
+// This keeps the scrollbar hidden and fixes layout after the user resizes.
+static void fitBufferToWindow() {
+    CONSOLE_SCREEN_BUFFER_INFO sbi;
+    if (!GetConsoleScreenBufferInfo(hOut, &sbi)) return;
+    SHORT winW = sbi.srWindow.Right  - sbi.srWindow.Left + 1;
+    SHORT winH = sbi.srWindow.Bottom - sbi.srWindow.Top  + 1;
+    if (winW == s_lastWinW && winH == s_lastWinH) return; // no change
+    // Buffer must be >= window size; set it exactly equal to hide scrollbars.
+    COORD bufSize = { winW, winH };
+    SetConsoleScreenBufferSize(hOut, bufSize);
+    s_lastWinW = winW;
+    s_lastWinH = winH;
+    // Clear the screen so partial rows from the old size are erased.
+    DWORD total = static_cast<DWORD>(winW) * winH;
+    COORD origin = {0, 0};
+    DWORD written;
+    FillConsoleOutputCharacterA(hOut, ' ', total, origin, &written);
+    FillConsoleOutputAttribute(hOut, sbi.wAttributes, total, origin, &written);
+    SetConsoleCursorPosition(hOut, origin);
+}
+
 // -----------------------------------------------------------------------
 // Lifecycle
 // -----------------------------------------------------------------------
@@ -52,19 +79,34 @@ void init() {
         & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
     SetConsoleMode(hIn, inMode);
 
+    fitBufferToWindow();
     setCursorVisible(false);
     clearScreen();
 }
 
 void shutdown() {
     setCursorVisible(true);
+
     // Restore modes.
     if (hIn  != INVALID_HANDLE_VALUE) SetConsoleMode(hIn,  originalInMode);
     if (hOut != INVALID_HANDLE_VALUE) SetConsoleMode(hOut, originalOutMode);
-    // Restore original color.
+
+    // Restore original color/attributes.
     SetConsoleTextAttribute(hOut, originalSBI.wAttributes);
-    clearScreen();
-    setCursorPos(0, 0);
+
+    // Instead of clearing the screen (which would erase shell history),
+    // scroll the viewport so the shell prompt appears below the app's output.
+    // We do this by moving the cursor to the bottom-left of the visible window,
+    // printing a newline, then letting the OS scroll naturally.
+    CONSOLE_SCREEN_BUFFER_INFO sbi;
+    if (GetConsoleScreenBufferInfo(hOut, &sbi)) {
+        SHORT bottom = sbi.srWindow.Bottom;
+        COORD pos = { 0, bottom };
+        SetConsoleCursorPosition(hOut, pos);
+    }
+    // Emit a newline so the shell prompt appears on a fresh line.
+    DWORD written;
+    WriteConsoleA(hOut, "\n", 1, &written, nullptr);
 }
 
 // -----------------------------------------------------------------------
@@ -139,6 +181,7 @@ int readKey() {
 // -----------------------------------------------------------------------
 
 ConsoleDimensions getDimensions() {
+    fitBufferToWindow(); // re-sync buffer size if window was resized
     CONSOLE_SCREEN_BUFFER_INFO sbi;
     if (GetConsoleScreenBufferInfo(hOut, &sbi)) {
         return {

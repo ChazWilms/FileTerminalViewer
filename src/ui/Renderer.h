@@ -19,6 +19,8 @@ struct RenderState {
     std::string              cmdLineBuffer;
     bool                     searchActive   = false;
     std::string              searchQuery;   // current live-search query
+    bool                     confirmActive  = false; // y/n prompt pending
+    std::string              sortIndicator; // e.g. "name▲" shown in column header
     std::string              clipboard;     // path in clipboard (for paste display)
 };
 

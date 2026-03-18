@@ -116,19 +116,32 @@ bool load(const std::string& path, Settings& out) {
         std::string key, value;
         if (!parseLine(line, key, value)) continue;
 
+        // General (non-key) settings handled before key parsing.
+        if (key == "show_hidden") {
+            out.show_hidden = (value == "true" || value == "1");
+            continue;
+        }
+
         int code = parseKeyValue(value);
         if (code < 0) continue; // unrecognised value — skip
 
         // Map config keys to Keybindings fields.
-        if      (key == "move_down")    out.keys.move_down    = code;
-        else if (key == "move_up")      out.keys.move_up      = code;
-        else if (key == "enter_dir")    out.keys.enter_dir    = code;
-        else if (key == "parent_dir")   out.keys.parent_dir   = code;
-        else if (key == "command_line") out.keys.command_line = code;
-        else if (key == "quit")         out.keys.quit         = code;
-        else if (key == "select")       out.keys.select       = code;
-        else if (key == "refresh")      out.keys.refresh      = code;
-        else if (key == "search")       out.keys.search       = code;
+        if      (key == "move_down")     out.keys.move_down     = code;
+        else if (key == "move_up")       out.keys.move_up       = code;
+        else if (key == "enter_dir")     out.keys.enter_dir     = code;
+        else if (key == "parent_dir")    out.keys.parent_dir    = code;
+        else if (key == "command_line")  out.keys.command_line  = code;
+        else if (key == "quit")          out.keys.quit          = code;
+        else if (key == "refresh")       out.keys.refresh       = code;
+        else if (key == "search")        out.keys.search        = code;
+        else if (key == "page_down")     out.keys.page_down     = code;
+        else if (key == "page_up")       out.keys.page_up       = code;
+        else if (key == "enter_file")    out.keys.enter_file    = code;
+        else if (key == "toggle_hidden") out.keys.toggle_hidden = code;
+        else if (key == "jump_top")      out.keys.jump_top      = code;
+        else if (key == "jump_bottom")   out.keys.jump_bottom   = code;
+        else if (key == "copy_entry")    out.keys.copy_entry    = code;
+        else if (key == "paste_entry")   out.keys.paste_entry   = code;
     }
     return true;
 }
@@ -149,15 +162,25 @@ bool writeTemplate(const std::string& path) {
         "# Example:  enter_dir = ENTER\n"
         "\n"
         "[keybindings]\n"
-        "move_down    = h\n"
-        "move_up      = t\n"
-        "enter_dir    = s\n"
-        "parent_dir   = a\n"
+        "move_down    = DOWN\n"
+        "move_up      = UP\n"
+        "enter_dir    = ENTER\n"
+        "parent_dir   = LEFT\n"
         "command_line = :\n"
         "quit         = q\n"
-        "select       =  \n"   // space
         "refresh      = r\n"
         "search       = /\n"
+        "page_down    = PAGEDOWN\n"
+        "page_up      = PAGEUP\n"
+        "enter_file      = RIGHT\n"
+        "toggle_hidden   = H\n"
+        "jump_top        = HOME\n"
+        "jump_bottom     = END\n"
+        "copy_entry      = c\n"
+        "paste_entry     = p\n"
+"\n"
+        "[general]\n"
+        "show_hidden     = false\n"
         "\n";
 
     return true;

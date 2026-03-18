@@ -23,7 +23,7 @@ target_include_directories(tfv PRIVATE src)
 # Windows-specific libraries
 if(WIN32)
     target_compile_definitions(tfv PRIVATE PLATFORM_WINDOWS)
-    target_link_libraries(tfv PRIVATE shlwapi)
+    target_link_libraries(tfv PRIVATE shlwapi shell32)
 endif()
 
 # Output binary to build/

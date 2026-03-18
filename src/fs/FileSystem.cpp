@@ -36,8 +36,7 @@ static std::wstring strToWstr(const std::string& s) {
 
 static std::string formatFileTime(const FILETIME& ft) {
     SYSTEMTIME st;
-    FileTimeToLocalFileTime(&ft, const_cast<FILETIME*>(&ft)); // side-effect free via copy
-    FILETIME localFt = ft;
+    FILETIME localFt;
     FileTimeToLocalFileTime(&ft, &localFt);
     FileTimeToSystemTime(&localFt, &st);
     char buf[32];
@@ -65,6 +64,7 @@ std::vector<Entry> listDirectory(const std::string& path) {
         Entry e;
         e.name     = name;
         e.modified = formatFileTime(fd.ftLastWriteTime);
+        e.hidden   = (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
             e.type = EntryType::Directory;

@@ -32,20 +32,27 @@ int specialKeyCode(const std::string& name);
 std::string keyName(int code);
 
 struct Keybindings {
-    int move_down    = 'h';
-    int move_up      = 't';
-    int enter_dir    = 's';
-    int parent_dir   = 'a';
+    int move_down    = 1080; // DOWN arrow
+    int move_up      = 1072; // UP arrow
+    int enter_dir    = 13;   // ENTER
+    int parent_dir   = 1075; // LEFT arrow
     int command_line = ':';
     int quit         = 'q';
-    int select       = ' ';   // Space bar selects/deselects an entry
     int refresh      = 'r';
-    int search       = '/';   // Enter live search mode
+    int search       = '/';  // Enter live search mode
+    int page_down    = 1081; // PAGE DOWN
+    int page_up      = 1073; // PAGE UP
+    int enter_file      = 1077; // RIGHT arrow — open file / enter dir (alias)
+    int toggle_hidden   = 'H';  // toggle visibility of hidden files
+    int jump_top        = 1071; // HOME — jump to first entry
+    int jump_bottom     = 1079; // END  — jump to last entry
+    int copy_entry      = 'c';  // copy selected entry to clipboard
+    int paste_entry     = 'p';  // paste clipboard into current directory
 };
 
 struct Settings {
     Keybindings keys;
-    // Future general settings (e.g. show_hidden, color_scheme) go here.
+    bool        show_hidden = false;
 };
 
 // Load settings from the given file path.
